@@ -1,0 +1,48 @@
+"""目标平台说明（本包刻意不定义任何 platform/alias 目标）。
+
+`--config=intel|arm64` 选择的构建平台直接写在 .bazelrc 里，
+写的是 apple_support 的原始 label，而不是本地的 alias：
+
+    build:intel   --platforms=@apple_support//platforms:darwin_x86_64
+    build:arm64   --platforms=@apple_support//platforms:darwin_arm64
+
+**不要在这里加 alias 再让 .bazelrc 指向它。**
+这正是 1.4.5 交叉编译产物架构错误的根因，必须避免回归。
+
+原因：rules_apple 的 apple 规则 transition 用 Label **精确比较**
+把平台映射成架构，映射表在 rules_apple 内部硬编码：
+
+    # rules_apple+/apple/internal/transition_support.bzl
+    _MACOS_PLATFORM_TO_ENV_ARCH = {
+        Label("@apple_support//platforms:darwin_x86_64"): "x86_64",
+        Label("@apple_support//platforms:darwin_arm64"): "arm64",
+        Label("@apple_support//platforms:darwin_arm64e"): "arm64e",
+    }
+
+    # _environment_archs() 里：
+    platform = settings["//command_line_option:platforms"][0]
+    macos_arch = _MACOS_PLATFORM_TO_ENV_ARCH.get(platform, None)
+    if macos_arch:
+        environment_archs = [macos_arch]
+
+传入 alias（如 //platforms:macos_intel -> @apple_support//platforms:macos_x86_64）
+时，Label 不相等，`.get()` 返回 None，代码**静默**落到下一个分支：
+
+    cpu_value = settings["//command_line_option:cpu"]   # 宿主机的 darwin_arm64
+    if cpu_value.startswith("darwin_"):
+        return cpu_value                                  # -> arm64
+
+于是命令行显示 --config=intel 生效、构建也 "Build completed successfully"，
+但 macos_application / macos_extension 经 transition 后拿到的是宿主 arm64。
+更难发现的是，transition 只挂在 apple_* 规则上：
+
+  - swift_library 没有 transition，会老实按 --platforms 编译成 x86_64 .o
+  - macos_application / macos_extension 有 transition，被拉回 arm64
+
+所以会出现"Core 库是 x86_64、主程序和 appex 是 arm64"的分裂产物，
+而链接阶段因为 -force_load 了 arm64 的静态库，不会报任何错。
+
+Universal 2 无法用单一 --platforms 表达（一条 Bazel 平台只能有一个 cpu 约束，
+而 lipo 合并发生在链接之后），因此也不在本文件提供 universal 平台；
+真正的 universal 产物由 scripts/package.sh --universal 负责。
+"""

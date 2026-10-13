@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    NTFSMountFinderSync.appex — FIFinderSync 扩展的 Info.plist
+
+    关键字段说明
+    =============
+
+    NSExtensionPointIdentifier
+        必须字面量为 com.apple.FinderSync。这是 Finder Sync 扩展点的唯一标识，
+        写错的话 appex 会被系统当作未知类型拒绝加载（表现为
+        「Finder → 偏好设置 → 扩展里看不到本扩展」）。
+
+    NSExtensionPrincipalClass
+        $(PRODUCT_MODULE_NAME).PrincipalClass。
+        PRODUCT_MODULE_NAME 由构建系统从 target 名推导，等于 NTFSMountFinderSync，
+        因此最终值是 NTFSMountFinderSync.PrincipalClass，对应
+        Sources/NTFSMountFinderSync/PrincipalClass.swift 里的 @objc(PrincipalClass)。
+        扩展启动时系统只实例化这一个类，之后所有 FIFinderSync 回调发给它。
+
+    NSExtensionAttributes / NSExtensionActivationRule
+        决定 Finder 在什么情况下唤醒本扩展。这里用 TRUEPREDICATE（总是激活）+
+        代码内过滤，理由：
+          - FinderSync 的激活规则谓词能用的属性键极其有限（只有
+            NSParsedSearchableItemAttributeKey 等），无法表达
+            「路径在 /Volumes 下且是挂载点」这种条件；
+          - 即使用 NSPredicate 过滤，Finder 仍要为匹配到的每个条目回调
+            requestBadgeIdentifierForURL:，而我们只在 /Volumes 下设置
+            directoryURLs（见 NTFSFinderSync.init），越界回调会被
+            路径查表直接 miss 掉，成本只是一次字典查找。
+        因此 TRUEPREDICATE + 代码内 /Volumes 前缀过滤是正确取舍：
+        规则保持简单，过滤成本可忽略。
+
+    为什么没有 NSExtensionToolbarItem / Get Info tab / File Provider service
+        ———————————————————————————————————————————————————————————————————
+        - 工具栏按钮**不需要** Info.plist 键。FinderSync 扩展的工具栏项是
+          通过覆写 FIFinderSync 的 toolbarItemName / toolbarItemImage /
+          toolbarItemToolTip 三个属性提供的（见 NTFSFinderSync.swift），
+          Finder 会自动把它放进工具栏的自定义区域。往 plist 里加
+          NSExtensionToolbarItem 不会有任何效果，反而会因为未知键被 App Store
+          校验挑刺。
+        - Get Info（显示简介）标签页**无法**由 FinderSync 扩展提供。
+          FIFinderSync 协议（FinderSync.h 里的 @protocol FIFinderSync）
+          只有 5 个可选回调：菜单、观察目录开始/结束、请求徽标、
+          以及三个协作相关的方法。没有「提供 Info 窗口」的钩子。
+          能控制 Get Info 外观的是 Get Info 插件（老式 NSBundle 插件），
+          已被 macOS 10.7 起废弃且在 Apple Silicon 上不可用。
+          所以本项目**不实现** Get Info 标签页 —— 状态展示由卷图标徽标
+          + 右键菜单 + 工具栏按钮三者承担。
+        - 协议里的 supportedServiceNamesForItemWithURL /
+          makeListenerEndpointForServiceName / valuesForAttributes 也不实现。
+          头文件把这三个方法放在 "/* Collaboration, starting in macOS 10.13 */"
+          分区下，消费侧 API FileManager.getFileProviderServicesForItemAtURL
+          的文档写明它返回的是「the File Provider extension that **manages**
+          the item」提供的服务。实测对 /Volumes 查询返回
+          "No valid file provider found from URL file:///Volumes/." ——
+          NTFS 卷是普通本地挂载点，不由任何 File Provider 扩展管理，
+          因此这些回调永远不会被 Finder 触发，属于死代码。
+          **没有任何 service 注册键要写**（注册发生在调用方
+          getFileProviderServicesForItemAtURL，而非被查询方）。
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleDisplayName</key>
+	<string>NTFSMount</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<!--
+	    最小系统版本 14.0：代码用到 NSImage.SymbolConfiguration(paletteColors:)
+	    （macOS 12+）与 Swift 6 严格并发（需 macOS 13+ SDK 运行库）。
+	-->
+	<key>NSPrincipalClass</key>
+	<string>NTFSMountFinderSync.PrincipalClass</string>
+
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.FinderSync</string>
+
+		<key>NSExtensionPrincipalClass</key>
+		<string>NTFSMountFinderSync.PrincipalClass</string>
+
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>NSExtensionActivationRule</key>
+			<dict>
+				<key>NSPredicate</key>
+				<string>TRUEPREDICATE</string>
+			</dict>
+		</dict>
+	</dict>
+</dict>
+</plist>

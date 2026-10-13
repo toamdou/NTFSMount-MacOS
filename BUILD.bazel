@@ -1,0 +1,11 @@
+"""Workspace 根目标。
+
+实际构建产物在 //swift:NTFSMount，这里只提供便捷别名。
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+alias(
+    name = "ntfsmount",
+    actual = "//swift:NTFSMount",
+)

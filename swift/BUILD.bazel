@@ -1,0 +1,136 @@
+"""NTFSMount 原生 Swift 构建目标。
+
+架构选择：
+    bazelisk build //swift:NTFSMount --config=intel       # Intel x86_64
+    bazelisk build //swift:NTFSMount --config=arm64       # Apple Silicon
+    bazelisk build //swift:NTFSMount                       # 宿主架构
+"""
+
+load("@rules_apple//apple:macos.bzl", "macos_application", "macos_command_line_application", "macos_extension")
+load("@rules_apple//apple:versioning.bzl", "apple_bundle_version")
+load("@rules_swift//swift:swift.bzl", "swift_library")
+
+package(default_visibility = ["//visibility:public"])
+
+_APP_VERSION = "1.0.0"
+_BUNDLE_ID = "com.ntfsmount.NTFSMount"
+
+# 系统 framework 链接参数（全是系统框架，不 fetch 外部仓库）。
+_APP_LINKOPTS = [
+    "-framework", "SwiftUI",
+    "-framework", "AppKit",
+    "-framework", "IOKit",
+    "-framework", "Security",
+    "-framework", "ServiceManagement",
+]
+
+# --- 版本号 ---
+apple_bundle_version(
+    name = "NTFSMountVersion",
+    build_version = _APP_VERSION,
+)
+
+# --- 资源文件 ---
+# 语言包与手册随 NTFSMountCore 走，glob 必须指向它的 Resources；指向别处会
+# 静默匹配到空集合，产出「零语言包」的 app，界面文案全退化成裸 key 且不报错。
+filegroup(
+    name = "resources",
+    srcs = glob(
+        ["Sources/NTFSMountCore/Resources/**"],
+        allow_empty = False,  # 匹配为空即构建失败，杜绝上面那种静默退化
+    ),
+)
+
+# --- Core 逻辑库 ---
+swift_library(
+    name = "NTFSMountCore",
+    srcs = glob(["Sources/NTFSMountCore/*.swift"]),
+    module_name = "NTFSMountCore",
+    data = [":resources"],
+)
+
+# --- UI 库 ---
+swift_library(
+    name = "NTFSMountUI",
+    srcs = glob(["Sources/NTFSMountUI/*.swift"]),
+    module_name = "NTFSMountUI",
+    deps = [":NTFSMountCore"],
+)
+
+# --- Finder Bridge（主应用与 appex 的共享层） ---
+# 主应用与 appex 在不同沙盒里，唯一合法通信通道是 App Group 容器；
+# 这里只放跨进程共享的数据结构与常量。
+swift_library(
+    name = "NTFSMountFinderBridge",
+    srcs = glob(["Sources/NTFSMountFinderBridge/*.swift"]),
+    module_name = "NTFSMountFinderBridge",
+    deps = [":NTFSMountCore"],
+)
+
+# --- Finder Sync 扩展（appex 的可执行代码） ---
+# appex 没有 C 的 main()，入口是 Info.plist 的 NSExtensionPrincipalClass，
+# 因此这里只产出静态库，bundle 由下面的 macos_extension 负责。
+swift_library(
+    name = "NTFSMountFinderSyncLib",
+    srcs = glob(["Sources/NTFSMountFinderSync/*.swift"]),
+    module_name = "NTFSMountFinderSync",
+    deps = [":NTFSMountFinderBridge"],
+)
+
+# --- Finder Sync 扩展 bundle（.appex） ---
+macos_extension(
+    name = "NTFSMountFinderSync",
+    bundle_id = _BUNDLE_ID + ".FinderSync",
+    infoplists = ["//packaging/FinderExtension:Info.plist"],
+    minimum_os_version = "14.0",
+    version = ":NTFSMountVersion",
+    deps = [":NTFSMountFinderSyncLib"],
+    entitlements = "//packaging/FinderExtension:NTFSMountFinderSync.entitlements",
+    linkopts = ["-framework", "FinderSync"],
+)
+
+# --- 可执行入口 ---
+# macos_command_line_application 是纯链接规则、不接受 srcs，
+# 源码必须先经 swift_library 编译再作为 deps 传入。
+swift_library(
+    name = "NTFSMountMain",
+    srcs = glob(["Sources/NTFSMount/*.swift"]),
+    module_name = "NTFSMount",
+    deps = [
+        ":NTFSMountCore",
+        ":NTFSMountUI",
+        ":NTFSMountFinderBridge",
+    ],
+)
+
+# --- 可执行文件（裸二进制，供链接/自测用） ---
+macos_command_line_application(
+    name = "ntfsmount_bin",
+    bundle_id = _BUNDLE_ID,
+    infoplists = ["Info.plist"],
+    minimum_os_version = "14.0",
+    version = ":NTFSMountVersion",
+    deps = [":NTFSMountMain"],
+    linkopts = _APP_LINKOPTS,
+)
+
+# --- 应用 bundle（主产物） ---
+# 用 macos_application 而非 command_line_application：Finder 集成需要把 appex
+# 嵌进 Contents/PlugIns/，只有前者支持 extensions / entitlements。
+#
+# entitlements 是**不对称**的，别改成「两个都要 sandbox」：appex 必须有
+# app-sandbox（否则 pkd 拒绝加载），主应用必须没有；两边都需要 App Group。
+macos_application(
+    name = "NTFSMount",
+    bundle_id = _BUNDLE_ID,
+    infoplists = ["Info.plist"],
+    minimum_os_version = "14.0",
+    version = ":NTFSMountVersion",
+    deps = [
+        ":NTFSMountMain",
+        ":resources",
+    ],
+    extensions = [":NTFSMountFinderSync"],
+    entitlements = "//packaging/FinderExtension:NTFSMount.entitlements",
+    linkopts = _APP_LINKOPTS,
+)

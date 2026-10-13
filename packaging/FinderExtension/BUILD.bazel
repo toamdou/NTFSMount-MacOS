@@ -1,0 +1,17 @@
+"""Finder 扩展的打包资源。
+
+`swift/BUILD.bazel` 里的 `macos_extension` 与 `macos_application` 需要引用
+扩展的 Info.plist 与两个 entitlements 文件。Bazel 要求被引用的文件位于
+某个 package 内，所以这里显式导出它们。
+
+注意：这些文件的实际生效是在 codesign 阶段（entitlements 只对签名后的
+二进制有意义），SwiftPM 层面不支持 target 级 entitlements。
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files([
+    "Info.plist",
+    "NTFSMount.entitlements",
+    "NTFSMountFinderSync.entitlements",
+])

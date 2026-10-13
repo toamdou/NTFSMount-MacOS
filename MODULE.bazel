@@ -1,0 +1,33 @@
+"""NTFSMount — macOS 原生 NTFS 读写工具（Swift）
+
+Bazel 构建配置。
+
+为什么用 Bazel 而不是 xcodebuild：
+  - xcodebuild 每次全量解析工程 + 打包，冷构建数分钟，且难以增量
+  - Bazel 的磁盘缓存 + 沙箱 + 远程缓存可让重复构建降到秒级
+  - 交叉编译 Intel (x86_64) 与 Apple Silicon (arm64) 通过 --platforms 切换，
+    无需两台机器或 Rosetta
+
+构建目标：
+  bazelisk build //swift:NTFSMount --config=intel    # Intel x86_64
+  bazelisk build //swift:NTFSMount --config=arm64    # Apple Silicon
+  bazelisk build //swift:NTFSMount                    # 宿主架构
+"""
+
+module(
+    name = "ntfsmount",
+    version = "1.0.0",
+)
+
+bazel_dep(name = "rules_apple", version = "5.3.0")
+
+# Swift 编译走 rules_swift。Bzlmod 下传递依赖不可见，
+# 只要在 BUILD 里 load 了 @rules_swift 就必须显式声明。
+# 版本需与 rules_apple 5.3.0 的约束（max_compatibility_level = 3）兼容。
+bazel_dep(name = "rules_swift", version = "4.1.1")
+
+# rules_apple 5.3.0 的传递依赖会把 apple_support 抬到 2.x，
+# 而 apple_support 2.x 已经移除 --apple_support_platforms flag，
+# 因此这里必须直接声明 2.x 版本。
+bazel_dep(name = "apple_support", version = "2.9.1")
+bazel_dep(name = "platforms", version = "1.0.0")

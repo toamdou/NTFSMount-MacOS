@@ -1,0 +1,70 @@
+# Bazel 构建配置
+#
+# 关键点：
+# 1. 用 bazelisk（.bazelversion 固定版本）保证团队与 CI 结果一致
+# 2. 通过 --platforms 切换目标架构，无需 Rosetta 或第二台机器
+# 3. 开启磁盘缓存，重复构建接近秒级
+#
+# apple_support 2.x 迁移说明：
+#   1.x 时代用 `--apple_support_platforms=` 指定一组候选平台，
+#   2.0 起该 flag 被完全移除（Bazel 直接报 Unrecognized option）。
+#   2.x 回归 Bazel 原生模型：只给 `--platforms=` 一个目标平台，
+#   由 apple_support 注册的 toolchain() 依据 target_compatible_with
+#   自动匹配。因此下面每个 config 只传一个 --platforms。
+#
+#   自定义平台必须带上 @apple_support//constraints:apple，
+#   否则 toolchain 解析会失败（见 platforms/BUILD.bazel）。
+
+common --enable_bzlmod
+common --lockfile_mode=update
+
+build --incompatible_strict_action_env
+build --action_env=BAZELISK_HOME
+
+# 本机 Bazel 的 sandbox-exec 无法施加 macOS sandbox 权限
+# （报错：sandbox_apply: Operation not permitted），
+# 与 SwiftPM 必须加 --disable-sandbox 是同一个原因。
+# 改用 local spawn strategy：直接在宿主机执行 action，不进沙箱。
+build --spawn_strategy=local
+
+# 并发度按机器调整，Apple Silicon 上核心数较多
+build --jobs=auto
+
+# ---------- 架构选择 ----------
+# 交叉编译目标架构。使用 --config=intel / arm64
+#
+# 关键：--platforms 必须**直接**写 @apple_support//platforms:darwin_* 的
+# 原始 label，不能写本地 alias（如 //platforms:macos_intel）。
+#
+# 原因：rules_apple 的 apple_platform_split_transition 用
+# Label 精确比较来把平台映射成架构，映射表是硬编码的：
+#     _MACOS_PLATFORM_TO_ENV_ARCH = {
+#         Label("@apple_support//platforms:darwin_x86_64"): "x86_64",
+#         Label("@apple_support//platforms:darwin_arm64"): "arm64",
+#         ...
+#     }
+# 传 alias 时 Label 不相等，映射失败，transition 静默回退到宿主 CPU：
+# 命令行显示 --config=intel 生效、构建也"成功"，
+# 但产物仍是 arm64（只有 swift_library 这类无 transition 的目标
+# 会老实按 --platforms 走，所以 Core 对、appex 错，极难发现）。
+build:intel   --platforms=@apple_support//platforms:darwin_x86_64
+build:arm64   --platforms=@apple_support//platforms:darwin_arm64
+# Universal 2 无法用单一 --platforms 表达（一个平台只能有一个 cpu 约束），
+# 正确做法是分别构建两个架构再用 lipo 合并，见 scripts/package.sh --universal
+build:universal --platforms=@apple_support//platforms:darwin_arm64
+
+# 不要用 --cpu 强制覆盖目标架构：Swift/clang 工具链内部会依据
+# --platforms 推导正确的 target triple 与 sysroot，手工指定 --cpu
+# 反而会让 toolchain 与 platform 约束冲突。
+# 若确实需要指定 host 工具的执行架构，用 --host_cpu 而不是 --cpu。
+
+build --apple_platform_type=macos
+
+# ---------- 产物 ----------
+# .app bundle 而不是裸二进制，便于直接运行与分发
+build --nolegacy_external_runfiles
+
+# ---------- 测试 ----------
+test --test_output=errors
+
+try-import %workspace%/user.bazelrc
