@@ -42,9 +42,7 @@ Free-NTFS-for-Mac，GitHub 仓库地址沿用至今）在 macOS 上读写 NTFS �
 
 ### 依赖判定不把 Homebrew 当必要条件
 
-`核心依赖 = macOS 版本 × macFUSE × ntfs-3g`，**不含 Homebrew**。
-MacPorts、Homebrew方式在检测上完全等价 —— 没有 Homebrew 的机器不会被误判成
-「缺少依赖」。考虑到上面提到的 Intel 现状，这一点对 Intel 用户尤其重要。
+没有 Homebrew 的机器不会被误判成缺少依赖
 
 ### 界面与系统集成
 
